@@ -1,6 +1,5 @@
 from Model.Dee import Dee
-from tools import get_time
-import os
+
 
 class Config(object):
     """CNN配置参数"""
@@ -35,19 +34,8 @@ class Config(object):
 
 
 if __name__ == '__main__':
+    import os
     # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
-    now_tim = get_time()
-
-    # l_path = './save/albert_model.ckpt'
-    l_path = None
-    # l_path = './model/albert_ft/20191123144355/model.ckpt'
-
-    path = './save/%s/model.ckpt' % (now_tim)
-
     config = Config()
     oj = Dee(config)
-    if not os.path.exists('./save/%s/' % (now_tim)):
-        os.makedirs('./save/%s/' % (now_tim))
-
-    # 开始训练
-    oj.train(l_path, path, "./data/log/")
+    oj.print()

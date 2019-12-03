@@ -90,7 +90,7 @@ class Dee(object):
             dataset = dataset.shuffle(self.config.batch_size * 10)
             dataset = dataset.prefetch(self.config.batch_size * 10)
         else:
-            dataset = dataset.batch(self.config.batch_size * 2)
+            dataset = dataset.batch(self.config.batch_size)
         iter = tf.data.Iterator.from_structure(dataset.output_types, dataset.output_shapes)
         sentences, sentences_mask, event_tag, ner_tag, path_tag, ner_list_index, ner_index, path_num, path_event_type = iter.get_next()
 
@@ -115,7 +115,7 @@ class Dee(object):
         path_event_type = tf.reshape(path_event_type, [-1])
 
         def select_path(path_tag, path_num, path_event_type):
-            path_index = np.random.randint(0, path_num[0], size=1)[0]
+            path_index = np.random.randint(0, path_num[0], size=1, dtype=np.int32)[0]
             return path_tag[path_index], path_index, path_event_type[path_index]
 
         # 随机选择路径
@@ -126,7 +126,7 @@ class Dee(object):
         # 去除padding的ner_index
         def select_nert_index(ner_index, ner_list_index):
             size = ner_list_index.argmin(axis=0)
-            size1 = ner_index[:,0].argmin(axis=0)
+            size1 = ner_index[:, 0].argmin(axis=0)
             return ner_index[:size1,:], ner_list_index[:size]
 
         ner_index, ner_list_index = tf.py_func(select_nert_index, [ner_index, ner_list_index], [tf.int32, tf.int32])
@@ -374,6 +374,9 @@ class Dee(object):
             self.train_op = train[-1]
             self.dev_op = dev[-1]
 
+            sentences, sentences_mask, event_tag, ner_tag, path_tag, ner_list_index, ner_index, path_num, path_event_type = dev[:-1]
+            self.ner_index = ner_index
+
             self.data = train[:-1]
 
             self.ner_loss, self.event_type_loss, self.path_loss = self.__graph(train[:-1], True)
@@ -476,9 +479,9 @@ class Dee(object):
         with tf.Session(graph=self.graph, config=tf.ConfigProto(allow_soft_placement=True,
                                                                 gpu_options=tf.GPUOptions(allow_growth=True))) as sess:
             sess.run(tf.global_variables_initializer())
-            sess.run(self.train_op)
-            entity_embedding, sentences_embedding = sess.run([self.path_loss, self.event_type_loss])
-            print('')
+            sess.run(self.dev_op)
+            ner_index = sess.run(self.ner_index)
+            print(ner_index)
 
 
 def get_data_count(path):
@@ -509,4 +512,3 @@ def get_f1(data):
     if F + G == 0:
         return 0
     return F * G * 2 / (F + G)
-

@@ -63,7 +63,7 @@ def process(data, tokenization, max_length):
 
 
 def get_byte_feature(data):
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[np.array(data).tobytes()]))
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[np.array(data, np.int32).tobytes()]))
 
 def get_int_feature(data):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=np.array(data, np.int64)))
@@ -229,7 +229,10 @@ def extend_data(data):
 
 
 if __name__ == '__main__':
-    train_data = read_json('./Data/dev.json')
+    # train_data = read_json('./Data/train.json')
+    # save_json(train_data[:10], './Data/sample.json')
+
+    train_data = read_json('./Data/sample.json')
     max_length = [64, 256]
     ner_tag = ['O']
     fields = []
@@ -258,4 +261,4 @@ if __name__ == '__main__':
 
     # save_json(ner_tag, './tfrecord/ner_tag.json')
     ner_tag = read_json('./tfrecord/ner_tag.json')
-    save_as_record('./tfrecord/dev.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)
+    save_as_record('./tfrecord/sample_train.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)
