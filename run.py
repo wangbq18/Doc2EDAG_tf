@@ -21,9 +21,9 @@ class Config(object):
         self.vocab_size = 21128
 
         self.print_per_batch = 100  # 每多少轮输出一次结果
-        self.dev_per_batch = 1000  # 多少轮验证一次
+        self.dev_per_batch = 5000  # 多少轮验证一次
 
-        self.train_path = './tfrecord/train.record'
+        self.train_path = './tfrecord/sample_train.record'
         self.dev_path = './tfrecord/sample_train.record'
         self.num_epochs = 100
 
@@ -35,7 +35,7 @@ class Config(object):
 
 
 if __name__ == '__main__':
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     now_tim = get_time()
 
     # l_path = './save/albert_model.ckpt'

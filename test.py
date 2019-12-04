@@ -1,5 +1,6 @@
 from Model.Dee import Dee
-
+import albert.tokenization as tokenization
+from create_record import process
 
 class Config(object):
     """CNN配置参数"""
@@ -33,9 +34,73 @@ class Config(object):
         return rt
 
 
+def get_ner_index_and_ner_list_index(ner_logits, content, sentence_mask):
+    sentences_size = sentence_mask.argmin(axis=0)
+    ner_logits = ner_logits[:sentences_size]
+    content = content[:sentences_size]
+    ner_map = {}
+    for index, x in enumerate(ner_logits):
+        cache = [index, -1, -1]
+        x_c = [str(_) for _ in content[index]][:sentence_mask[index]]
+        for index_y, y in enumerate(x[:sentence_mask[index]]):
+            if '_B' in tag_map[y]:
+                if cache[1]!=-1:
+                    cache[2] = index_y
+                    name = '-'.join(x_c[cache[1]:cache[2]])
+                    if name not in ner_map.keys():
+                        ner_map[name] = []
+                    ner_map[name].append(cache)
+                    cache = [index, index_y, -1]
+                else:
+                    cache[1] = index_y
+            if 'O' == tag_map[y] and cache[1] != -1:
+                cache[2] = index_y
+                name = '-'.join(x_c[cache[1]:cache[2]])
+                if name not in ner_map.keys():
+                    ner_map[name] = []
+                ner_map[name].append(cache)
+                cache = [index, -1, -1]
+
+        # 处理最后一个字符也是实体的情况
+        if cache[1] != -1:
+            cache[2] = index_y
+            name = '-'.join(x_c[cache[1]:cache[2]])
+            if name not in ner_map.keys():
+                ner_map[name] = []
+            ner_map[name].append(cache)
+
+    ner_list_index = [0]
+    ner_index = []
+    for k in ner_map.keys():
+        ner_index.extend(ner_map[k])
+        ner_list_index.append(len(ner_index))
+
+    return ner_logits, ner_index, ner_list_index
+
+
+from tools import read_json
+cache = read_json('./tfrecord/ner_tag.json')
+tag_map = {}
+
+for k in cache.keys():
+    tag_map[cache[k]] = k
+
 if __name__ == '__main__':
     import os
+    import numpy as np
     # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     config = Config()
     oj = Dee(config)
-    oj.print()
+    cache = ["证券代码：600641证券简称：万业企业公告编号：临2009-003", "上海万业企业股份有限公司关于公司高管增持公司股票的公告",
+         "本公司及董事会全体成员保证公告内容的真实、准确和完整，对公告的虚假记载、误导性陈述或者重大遗漏负连带责任。",
+         "2008年12月31日，公司董事会秘书获悉,公司监事长张峻根据原计划在当日从二级市场购入本公司股票50000股，截止目前公司高管持有公司股票共计431090股。",
+         "公司董事会将根据中国证监会及上海证券交易所有关规定，将上述增持股票申请锁定，同时监督并提醒其按照相关法律法规买卖所持有的本公司股票。", "特此公告。", "上海万业企业股份有限公司", "董事会",
+         "2009年1月5日"]
+
+    max_length = [64, 256]
+    vocab = tokenization.FullTokenizer('./albert/config/vocab.txt')
+    data = process(cache, vocab, max_length)
+
+    em, sentences_mask = oj.predict('./save/20191204054316/model.ckpt', data)
+    ner_logits, ner_index, ner_list_index = get_ner_index_and_ner_list_index(em, data[0], sentences_mask+3)
+    print('')

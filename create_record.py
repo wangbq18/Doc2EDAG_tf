@@ -124,18 +124,21 @@ def save_as_record(path, data, vocab_path, max_length, fields):
             tag = x['ann_mspan2guess_field'][field]
             indexs = x['ann_mspan2dranges'][field]
             for index in indexs:
-                if index[2]> max_length[1]:
+                if index[2]> max_length[1]-1:
                     flag=1
                     break
-                ner_tag[index[0]][index[1]] = fields['%s_B' % str(tag).upper()]
+                ner_tag[index[0]][index[1]+1] = fields['%s_B' % str(tag).upper()]
                 for i in range(index[1] + 1, index[2]):
-                    ner_tag[index[0]][i] = fields['%s_I' % str(tag).upper()]
+                    ner_tag[index[0]][i+1] = fields['%s_I' % str(tag).upper()]
         if flag==1:
             continue
 
         # 生成路径tag
         # 维度分别是路径数，字段数，候选值
         path_tag = np.zeros(path_tag_size, dtype=np.int32)+(-1)
+
+        # 存储完整路径
+        path_entity_list = np.zeros(path_tag_size[:2], dtype=np.int32) + (-1)
         path_event_type= np.zeros([path_tag_size[0]], dtype=np.int32)+(-1)
         event_tag = [0 for i in range(5)]
 
@@ -145,6 +148,8 @@ def save_as_record(path, data, vocab_path, max_length, fields):
         ner_list_index = [0]
         for k in ners:
             ner_index.extend(x['ann_mspan2dranges'][k])
+            ner_index[-1][1] += 1
+            ner_index[-1][2] += 1
             ner_list_index.append(ner_list_index[-1]+len(x['ann_mspan2dranges'][k]))
 
         for i in range(max_ner_size-len(ner_index)):
@@ -180,11 +185,19 @@ def save_as_record(path, data, vocab_path, max_length, fields):
             for index2,path in enumerate(paths[start:]):
                 cache = event_tree[k][path[0]]
                 # 跳过第一个节点
+                if ners.index(path[0]) != 'NA':
+                    path_entity_list[start + index2, 0] = ners.index(path[0])+1
+                else:
+                    path_entity_list[start + index2, 0] = 0
                 for i, p in enumerate(path[1:]):
                     cache = cache[p]
                     tag = np.array([0 if f not in cache.keys() else 1 for f in ners], dtype=np.int32)
                     tag = np.concatenate([tag, np.zeros([path_tag_size[-1] - tag.size], dtype=np.int32)], axis=0)
                     path_tag[start+index2,i+1,:] = tag
+                    if p!='NA':
+                        path_entity_list[start+index2,i+1] = ners.index(p)+1
+                    else:
+                        path_entity_list[start + index2, i + 1] = 0
                 path_event_type[start + index2] = k
             tag = np.array([0 if f not in [c[0] for c in paths] else 1 for f in ners], dtype=np.int32)
             tag = np.concatenate([tag, np.zeros([path_tag_size[-1] - tag.size], dtype=np.int32)], axis=0)
@@ -196,16 +209,32 @@ def save_as_record(path, data, vocab_path, max_length, fields):
         if len(ner_index) != max_ner_size:
             continue
 
+        # # test
+        # def select_path(path_tag, path_num, path_event_type, path_entity_list):
+        #     path_index = np.random.randint(0, path_num[0], size=1, dtype=np.int32)[0]
+        #     return path_tag[path_index], path_index, path_event_type[path_index], path_entity_list[path_index]
+        #
+        # path_tag, path_index, path_event_type, path_entity_list = select_path(path_tag, [len(paths)], path_event_type,
+        #                                                                       path_entity_list)
+        #
+        # # 去除padding的ner_index
+        # def select_nert_index(path_entity_list):
+        #     size2 = path_entity_list.argmin(axis=0)
+        #     return path_entity_list[:size2]
+        #
+        # path_entity_list = select_nert_index(path_entity_list)
+
         features = tf.train.Features(feature={
             'sentences': get_byte_feature(sentences), # 原始文本
             'sentences_mask': get_byte_feature(sentences_mask), # 原始文本长度
-            'event_tag': get_byte_feature(event_tag),
-            'ner_tag': get_byte_feature(ner_tag),
-            'path_tag':get_byte_feature(path_tag),
-            'ner_list_index': get_byte_feature(ner_list_index),
-            'ner_index': get_byte_feature(ner_index),
+            'event_tag': get_byte_feature(event_tag), # 事件标签
+            'ner_tag': get_byte_feature(ner_tag), # 实体标签
+            'path_tag':get_byte_feature(path_tag), # 路径标签
+            'ner_list_index': get_byte_feature(ner_list_index), #
+            'ner_index': get_byte_feature(ner_index), #
             'path_event_type': get_int_feature(path_event_type),
-            'path_num': get_int_feature([len(paths)])
+            'path_num': get_int_feature([len(paths)]),
+            'path_entity_list': get_byte_feature(path_entity_list)
             # 'mask1': tf.train.Feature(int64_list=tf.train.Int64List(value=mask1)),
         })
 
