@@ -1,4 +1,4 @@
-﻿from Model.Dee import Dee
+from Model.Dee_bert import Dee
 from tools import get_time
 import os
 
@@ -8,8 +8,8 @@ class Config(object):
     def __init__(self):
         self.seq_length = 256
         self.batch_size = 1
-        self.bert_config_path = './model/albert_tiny/albert_config_tiny.json'
-        self.lr = 1e-3
+        self.bert_config_path = './albert/config/albert_config_tiny.json'
+        self.lr = 1e-5
         self.hidden_size = 312
         self.sentence_size = 64
         self.fields_size = 35
@@ -21,10 +21,10 @@ class Config(object):
         self.vocab_size = 21128
 
         self.print_per_batch = 100  # 每多少轮输出一次结果
-        self.dev_per_batch = 2000  # 多少轮验证一次
+        self.dev_per_batch = 5000  # 多少轮验证一次
 
-        self.train_path = './tfrecord/sample_train.record'
-        self.dev_path = './tfrecord/sample_train.record'
+        self.train_path = './tfrecord/train.record'
+        self.dev_path = './tfrecord/dev.record'
         self.num_epochs = 100
 
     def get_all_number(self):
@@ -38,9 +38,9 @@ if __name__ == '__main__':
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     now_tim = get_time()
 
-    # l_path = './save/albert_model.ckpt'
-    l_path = None
-    # l_path = './save/20191205185712/model.ckpt'
+    l_path = './save/albert_tiny/albert_model.ckpt'
+    # l_path = None
+    # l_path = './model/albert_ft/20191123144355/model.ckpt'
 
     path = './save/%s/model.ckpt' % (now_tim)
 
@@ -50,4 +50,4 @@ if __name__ == '__main__':
         os.makedirs('./save/%s/' % (now_tim))
 
     # 开始训练
-    oj.train(l_path, path, "./data/log/")
+    oj.train(l_path, path, "./data/log/", True)

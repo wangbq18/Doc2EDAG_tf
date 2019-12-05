@@ -7,6 +7,7 @@ from tqdm import tqdm
 from Model.Transformer import transformer_model, create_attention_mask_from_input_mask
 from tools import read_json, save_json
 from Optimization import create_optimizer
+import albert.modeling as modeling
 
 logging.basicConfig(level=logging.INFO)
 
@@ -429,7 +430,7 @@ class Dee(object):
                                             reuse=tf.AUTO_REUSE)
         return embedding
 
-    def __get_transformer_model(self, input, mask, config, name, use_embedding=True, is_training=False):
+    def __get_transformer_model(self, input, mask, config, name, use_embedding=True, is_training=False, use_bert=False):
         """
         对输入使用transformer编码
         :param input:
@@ -439,28 +440,41 @@ class Dee(object):
         :param use_embedding:
         :return:
         """
-        if mask != None:
-            attention_mask = create_attention_mask_from_input_mask(
-                input, tf.expand_dims(mask, axis=1))
-        else:
-            attention_mask = None
+        if use_bert:
+            bert_config = modeling.BertConfig.from_json_file(self.config.bert_config_path)
+            mask = tf.sequence_mask(mask, self.config.seq_length, dtype=tf.float32)
+            model = modeling.BertModel(
+                config=bert_config,
+                is_training=is_training,
+                input_ids=input,
+                input_mask=mask,
+                scope='bert')
 
-        if use_embedding:
-            with tf.variable_scope('%s_embedding' % (name), reuse=tf.AUTO_REUSE):
-                input_embedding = self.__get_input_embedding(input, config)
+            encode = model.sequence_output
+            return encode, model.get_pooled_output()
         else:
-            input_embedding = input
+            if mask != None:
+                attention_mask = create_attention_mask_from_input_mask(
+                    input, tf.expand_dims(mask, axis=1))
+            else:
+                attention_mask = None
 
-        if is_training:
-            encode = transformer_model(input_embedding, attention_mask, hidden_size=config.hidden_size,
-                                       num_attention_heads=config.num_attention_heads,
-                                       intermediate_size=config.hidden_size * 4, name=name)
-        else:
-            encode = transformer_model(input_embedding, attention_mask, hidden_size=config.hidden_size,
-                                       num_attention_heads=config.num_attention_heads, attention_probs_dropout_prob=0,
-                                       hidden_dropout_prob=0,
-                                       intermediate_size=config.hidden_size * 4, name=name)
-        return encode
+            if use_embedding:
+                with tf.variable_scope('%s_embedding' % (name), reuse=tf.AUTO_REUSE):
+                    input_embedding = self.__get_input_embedding(input, config)
+            else:
+                input_embedding = input
+
+            if is_training:
+                encode = transformer_model(input_embedding, attention_mask, hidden_size=config.hidden_size,
+                                           num_attention_heads=config.num_attention_heads,
+                                           intermediate_size=config.hidden_size * 4, name=name)
+            else:
+                encode = transformer_model(input_embedding, attention_mask, hidden_size=config.hidden_size,
+                                           num_attention_heads=config.num_attention_heads, attention_probs_dropout_prob=0,
+                                           hidden_dropout_prob=0,
+                                           intermediate_size=config.hidden_size * 4, name=name)
+            return encode
 
     def __graph(self, input, is_training):
         """
@@ -473,8 +487,10 @@ class Dee(object):
         sentences, sentences_mask, event_tag, ner_tag, path_tag, ner_list_index, ner_index, path_num, path_event_type, path_entity_list = input
 
         # 第一层transformer编码，用于实体识别以及后续输入
-        output1 = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
-                                               is_training=is_training)
+        output1, ft = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
+                                               is_training=is_training, use_bert=True)
+
+        ft = tf.reduce_max(ft, axis=0, keep_dims=True)
 
         """
         计算ner的loss,和实际输出值
@@ -496,7 +512,7 @@ class Dee(object):
 
         with tf.variable_scope('event_type', reuse=tf.AUTO_REUSE):
             # 事件类型分类
-            event_type_logit = tf.layers.conv1d(tf.reshape(document_embedding, [1, 1, self.config.hidden_size]),
+            event_type_logit = tf.layers.conv1d(tf.reshape(ft, [1, 1, self.config.hidden_size]),
                                                 self.config.event_type_size, 1, name='event_type_dense',
                                                 reuse=tf.AUTO_REUSE)
             # TODO 需要排查
@@ -556,8 +572,9 @@ class Dee(object):
     def __get_ner_and_event_type_predict(self, sentences, sentences_mask, is_training=False):
 
         # 第一层transformer编码，用于实体识别以及后续输入
-        output1 = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
-                                               is_training=is_training)
+        output1, ft = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
+                                               is_training=is_training, use_bert=True)
+        ft = tf.reduce_max(ft, axis=0, keep_dims=True)
 
         """
         ner，需要注意解码部分
@@ -638,7 +655,7 @@ class Dee(object):
         with tf.variable_scope('event_type', reuse=tf.AUTO_REUSE):
 
             # 事件类型分类
-            event_type_logit = tf.layers.conv1d(tf.reshape(document_embedding, [1, 1, self.config.hidden_size]),
+            event_type_logit = tf.layers.conv1d(tf.reshape(ft, [1, 1, self.config.hidden_size]),
                                                 self.config.event_type_size, 1, name='event_type_dense',
                                                 reuse=tf.AUTO_REUSE)
 
@@ -662,8 +679,8 @@ class Dee(object):
             dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc = self.__graph(
                 dev[:-1], False)
 
-            self.dev_loss = 0.05 * dev_ner_loss + 0.95 * (dev_event_type_loss + dev_path_loss) / 2
-            self.loss = 0.05 * self.ner_loss + 0.95 * (self.event_type_loss + self.path_loss) / 2
+            self.dev_loss = 0.05 * dev_ner_loss + 0.95 * (dev_event_type_loss + dev_path_loss)
+            self.loss = 0.05 * self.ner_loss + 0.95 * (self.event_type_loss + self.path_loss)
             # self.dev_loss = dev_path_loss
             # self.loss = self.path_loss
 
@@ -694,14 +711,15 @@ class Dee(object):
                                                                                          self.field_id_input,
                                                                                          is_training=False)
 
-            # self.optimization = tf.train.AdamOptimizer(self.config.lr).minimize(self.loss)
+            self.optimization = tf.train.AdamOptimizer(self.config.lr).minimize(self.loss)
+            self.learning_rate = tf.constant(value=self.config.lr, shape=[], dtype=tf.float32)
             # optimization = tf.train.MomentumOptimizer(self.config.lr, momentum=0.9).minimize(train_loss)
             # self.optimization, self.learning_rate = self.__get_optimization(self.loss, self.config.lr)
-            self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 50000, 5000, False)
+            # self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 50000, 5000, False)
 
             self.saver = tf.train.Saver()
             # self.saver1 = tf.train.Saver(tf.trainable_variables())
-            # self.saver_v = tf.train.Saver(tf.trainable_variables()[:1])
+            self.saver_v = tf.train.Saver(tf.trainable_variables()[:24])
 
             self.summary_train_loss = tf.summary.scalar('train_loss', self.loss)
             self.summary_dev_loss = tf.summary.scalar('dev_loss', self.dev_loss)
@@ -778,7 +796,7 @@ class Dee(object):
 
             if is_reload:
                 sess.run(tf.global_variables_initializer())
-                self.saver.restore(sess, load_path)
+                self.saver_v.restore(sess, load_path)
             else:
                 sess.run(tf.global_variables_initializer())
                 # self.saver_v.restore(sess, load_path)
