@@ -112,7 +112,10 @@ class Dee(object):
 
         sentences = tf.decode_raw(sentences, tf.int32)
         sentences_mask = tf.decode_raw(sentences_mask, tf.int32)
-        event_tag = tf.decode_raw(event_tag, tf.float32)
+
+        event_tag = tf.decode_raw(event_tag, tf.int32)
+        # event_tag = tf.cast(event_tag, tf.float32)
+
         ner_tag = tf.decode_raw(ner_tag, tf.int32)
         path_tag = tf.decode_raw(path_tag, tf.int32)
         ner_list_index = tf.decode_raw(ner_list_index, tf.int32)
@@ -270,10 +273,10 @@ class Dee(object):
             logits = tf.layers.dense(input_encode, 2, name='path_logits_dense', reuse=tf.AUTO_REUSE)
 
         if tag != None:
-            loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=tf.one_hot(tag, 2))
+            loss = tf.nn.softmax_cross_entropy_with_logits_v2(logits=logits, labels=tf.one_hot(tag, 2))
             return logits, loss
         else:
-            return tf.nn.sigmoid(logits)
+            return tf.nn.softmax(logits)
 
     def __get_next_node2(self, m, entity, field_id):
         with tf.variable_scope('path', reuse=tf.AUTO_REUSE):
@@ -291,21 +294,22 @@ class Dee(object):
         n_entity_embedding = entity + field_embedding
 
         input = tf.reshape(tf.concat([m, n_entity_embedding], axis=0), [1, -1, self.config.hidden_size])
-        input_encode = \
-            self.__get_transformer_model(input, None, self.config, name='transformer-3', use_embedding=False)[0]
+        with tf.variable_scope('path', reuse=tf.AUTO_REUSE):
+            input_encode = \
+                self.__get_transformer_model(input, None, self.config, name='transformer-3', use_embedding=False)[0]
 
-        def select_entity(input, shape):
-            return input[shape[0]:], shape
+            def select_entity(input, shape):
+                return input[shape[0]:], shape
 
-        input_encode, _ = tf.py_func(select_entity, [input_encode, tf.shape(m)], [tf.float32, tf.int32])
-        input_encode = tf.reshape(input_encode, [-1, self.config.hidden_size])
+            input_encode, _ = tf.py_func(select_entity, [input_encode, tf.shape(m)], [tf.float32, tf.int32])
+            input_encode = tf.reshape(input_encode, [-1, self.config.hidden_size])
 
-        with tf.variable_scope('path_dense', reuse=tf.AUTO_REUSE):
-            logits = tf.layers.dense(input_encode, 2, name='path_logits_dense', reuse=tf.AUTO_REUSE)
+            with tf.variable_scope('path_dense', reuse=tf.AUTO_REUSE):
+                logits = tf.layers.dense(input_encode, 2, name='path_logits_dense', reuse=tf.AUTO_REUSE)
 
         # 更新m
 
-        return tf.nn.sigmoid(logits), n_entity_embedding
+        return tf.nn.softmax(logits), n_entity_embedding
 
     def __get_path_loss(self, fields_embedding, sentences_embedding, entity_embedding, path_tag, path_entity_list):
         """
@@ -442,12 +446,14 @@ class Dee(object):
 
         with tf.variable_scope('event_type', reuse=tf.AUTO_REUSE):
             # 事件类型分类
-            event_type_logit = tf.layers.dense(document_embedding, self.config.event_type_size, activation=tf.tanh,
-                                               name='event_type_dense',
-                                               reuse=tf.AUTO_REUSE)
+            event_type_logit = tf.layers.conv1d(tf.reshape(document_embedding, [1,1,self.config.hidden_size]), self.config.event_type_size, 1, name='event_type_dense', reuse=tf.AUTO_REUSE)
             # TODO 需要排查
-            event_type_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=event_type_logit,
-                                                                      labels=tf.reshape(event_tag, [-1, 5]))
+            event_type_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=tf.reshape(event_type_logit, [-1,5]),
+                                                                         labels=tf.reshape(tf.cast(event_tag, tf.float32), [-1,5]))
+
+            # 计算准确率
+            event_type_predict = tf.cast((tf.nn.sigmoid(event_type_logit) >= 0.5), tf.int32)
+
 
         """
         计算事件填充loss
@@ -475,7 +481,7 @@ class Dee(object):
             path_loss = self.__get_path_loss(fields_embedding, sentences_embedding, entity_embedding, path_tag,
                                              path_entity_list)
 
-        return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(path_loss), g_v
+        return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(path_loss), g_v, event_type_predict
 
     def __get_ner_and_event_type_predict(self, sentences, sentences_mask):
 
@@ -491,9 +497,9 @@ class Dee(object):
 
         def viterbi_decode(ner_ft, g_v):
             p = [tf.contrib.crf.viterbi_decode(x, g_v)[0] for x in ner_ft]
-            return p, g_v
+            return np.array(p, dtype=np.int32), g_v
 
-        ner_tf_max, _ = tf.py_func(viterbi_decode, [ner_ft, self.g_v], [tf.int32, tf.int32])
+        ner_tf_max, _ = tf.py_func(viterbi_decode, [ner_ft, self.g_v], [tf.int32, tf.float32])
 
         """
         根据预测结果生成ner_list_index和ner_index, 写入index时需要+1
@@ -561,9 +567,9 @@ class Dee(object):
         with tf.variable_scope('event_type', reuse=tf.AUTO_REUSE):
 
             # 事件类型分类
-            event_type_logit = tf.layers.dense(document_embedding, self.config.event_type_size, activation=tf.tanh,
-                                               name='event_type_dense',
-                                               reuse=tf.AUTO_REUSE)
+            event_type_logit = tf.layers.conv1d(tf.reshape(document_embedding, [1, 1, self.config.hidden_size]),
+                                                self.config.event_type_size, 1, name='event_type_dense',
+                                                reuse=tf.AUTO_REUSE)
 
         event_type_logit = tf.nn.sigmoid(event_type_logit)
 
@@ -578,12 +584,15 @@ class Dee(object):
             self.dev_op = dev[-1]
 
             self.data = train[:-1]
+            self.dev_data = dev[:-1]
 
-            self.ner_loss, self.event_type_loss, self.path_loss, self.g_v = self.__graph(train[:-1], True)
-            dev_ner_loss, dev_event_type_loss, dev_path_loss, _ = self.__graph(dev[:-1], False)
+            self.ner_loss, self.event_type_loss, self.path_loss, self.g_v, self.event_type_predict = self.__graph(train[:-1], True)
+            dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_predict = self.__graph(dev[:-1], False)
 
-            self.dev_loss = 0.2 * dev_ner_loss + 0.2 * dev_event_type_loss + 0.6 * dev_path_loss
-            self.loss = 0.2 * self.ner_loss + 0.2 * self.event_type_loss + 0.6 * self.path_loss
+            self.dev_loss = 0.05 * dev_ner_loss + 0.95 * (dev_event_type_loss + dev_path_loss)
+            self.loss = 0.05 * self.ner_loss + 0.95 * (self.event_type_loss + self.path_loss)
+            # self.dev_loss = dev_event_type_loss
+            # self.loss = self.event_type_loss
 
             """
             创建用于预测的tensor
@@ -627,13 +636,15 @@ class Dee(object):
     def evaluate(self, sess, count, test_data_count):
         sess.run(self.dev_op)
         all_loss = []
+        all_acc =[]
         batch_size = self.config.batch_size
         size = test_data_count // batch_size if test_data_count % batch_size == 0 else test_data_count // batch_size + 1
         for step in tqdm(range(size)):
-            loss, summary = sess.run([self.dev_loss, self.summary_dev_loss])
+            loss, event_tag, event_type_predict, summary = sess.run([self.dev_loss, self.dev_data[2], self.dev_event_type_predict, self.summary_dev_loss])
+            all_acc.append(np.sum(event_type_predict[0][0] * event_tag) / np.sum(event_tag))
             all_loss.append(loss)
 
-        return sum(all_loss) / len(all_loss)
+        return sum(all_loss) / len(all_loss), sum(all_acc) / len(all_acc)
 
     def train(self, load_path, save_path, log_path, is_reload=False):
         log_writer = tf.summary.FileWriter(log_path, self.graph)
@@ -645,8 +656,9 @@ class Dee(object):
         test_data_count = get_data_count(self.config.dev_path)
         train_data_count = get_data_count(self.config.train_path)
         size = train_data_count // self.config.batch_size if train_data_count % self.config.batch_size == 0 else train_data_count // self.config.batch_size + 1
-        require_improvement = 3500  # 如果超过指定轮未提升，提前结束训练
+        require_improvement = 25000  # 如果超过指定轮未提升，提前结束训练
         all_loss = 0
+        all_acc = 0.0
 
         flag = False
         with tf.Session(graph=self.graph, config=tf.ConfigProto(allow_soft_placement=True,
@@ -666,8 +678,8 @@ class Dee(object):
                 sess.run(self.train_op)
                 for step in range(size):
                     if total_batch % self.config.print_per_batch == 0:
-                        if total_batch % self.config.dev_per_batch == 0:
-                            dev_loss = self.evaluate(sess, total_batch // self.config.dev_per_batch - 1,
+                        if total_batch % self.config.dev_per_batch == 0 and total_batch!=0:
+                            dev_loss, dev_acc = self.evaluate(sess, total_batch // self.config.dev_per_batch - 1,
                                                      test_data_count)
                             if min_loss == -1 or dev_loss <= min_loss:
                                 self.saver.save(sess=sess, save_path=save_path)
@@ -678,19 +690,20 @@ class Dee(object):
                                 improved_str = ''
 
                             time_dif = get_time_dif(start_time)
-                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Val loss: {2:>6.5}, Time: {3} {4}'
+                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Train Event acc: {2:>6.5}, Val loss: {3:>6.5}, Val acc: {4:>6.5}, Time: {5} {6}'
                             logging.info(
-                                msg.format(total_batch, all_loss / self.config.print_per_batch, dev_loss,
+                                msg.format(total_batch, all_loss / self.config.print_per_batch, all_acc / self.config.print_per_batch, dev_loss, dev_acc,
                                            time_dif, improved_str))
                         else:
                             time_dif = get_time_dif(start_time)
-                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Time: {2}'
-                            logging.info(msg.format(total_batch, all_loss / self.config.print_per_batch, time_dif))
+                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Train Event acc: {2:>6.5}, Time: {3}'
+                            logging.info(msg.format(total_batch, all_loss / self.config.print_per_batch, all_acc / self.config.print_per_batch, time_dif))
                         all_loss = 0
-
-                    loss_train, summary, _ = sess.run([self.loss, self.summary_train_loss, self.optimization])  # 运行优化
+                        all_acc = 0.0
+                    loss_train, event_type_predict, event_tag, summary, _ = sess.run([self.loss, self.event_type_predict, self.data[2], self.summary_train_loss, self.optimization])  # 运行优化
                     log_writer.add_summary(summary, total_batch)
                     all_loss += loss_train
+                    all_acc += np.sum(event_type_predict[0][0] * event_tag)/np.sum(event_tag)
                     total_batch += 1
 
                     if total_batch - last_improved > require_improvement:

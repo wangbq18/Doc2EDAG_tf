@@ -34,73 +34,35 @@ class Config(object):
         return rt
 
 
-def get_ner_index_and_ner_list_index(ner_logits, content, sentence_mask):
-    sentences_size = sentence_mask.argmin(axis=0)
-    ner_logits = ner_logits[:sentences_size]
-    content = content[:sentences_size]
-    ner_map = {}
-    for index, x in enumerate(ner_logits):
-        cache = [index, -1, -1]
-        x_c = [str(_) for _ in content[index]][:sentence_mask[index]]
-        for index_y, y in enumerate(x[:sentence_mask[index]]):
-            if '_B' in tag_map[y]:
-                if cache[1]!=-1:
-                    cache[2] = index_y
-                    name = '-'.join(x_c[cache[1]:cache[2]])
-                    if name not in ner_map.keys():
-                        ner_map[name] = []
-                    ner_map[name].append(cache)
-                    cache = [index, index_y, -1]
-                else:
-                    cache[1] = index_y
-            if 'O' == tag_map[y] and cache[1] != -1:
-                cache[2] = index_y
-                name = '-'.join(x_c[cache[1]:cache[2]])
-                if name not in ner_map.keys():
-                    ner_map[name] = []
-                ner_map[name].append(cache)
-                cache = [index, -1, -1]
-
-        # 处理最后一个字符也是实体的情况
-        if cache[1] != -1:
-            cache[2] = index_y
-            name = '-'.join(x_c[cache[1]:cache[2]])
-            if name not in ner_map.keys():
-                ner_map[name] = []
-            ner_map[name].append(cache)
-
-    ner_list_index = [0]
-    ner_index = []
-    for k in ner_map.keys():
-        ner_index.extend(ner_map[k])
-        ner_list_index.append(len(ner_index))
-
-    return ner_logits, ner_index, ner_list_index
-
-
-from tools import read_json
-cache = read_json('./tfrecord/ner_tag.json')
-tag_map = {}
-
-for k in cache.keys():
-    tag_map[cache[k]] = k
-
 if __name__ == '__main__':
     import os
     import numpy as np
     # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     config = Config()
     oj = Dee(config)
-    cache = ["证券代码：600641证券简称：万业企业公告编号：临2009-003", "上海万业企业股份有限公司关于公司高管增持公司股票的公告",
-         "本公司及董事会全体成员保证公告内容的真实、准确和完整，对公告的虚假记载、误导性陈述或者重大遗漏负连带责任。",
-         "2008年12月31日，公司董事会秘书获悉,公司监事长张峻根据原计划在当日从二级市场购入本公司股票50000股，截止目前公司高管持有公司股票共计431090股。",
-         "公司董事会将根据中国证监会及上海证券交易所有关规定，将上述增持股票申请锁定，同时监督并提醒其按照相关法律法规买卖所持有的本公司股票。", "特此公告。", "上海万业企业股份有限公司", "董事会",
-         "2009年1月5日"]
+    cache = [
+        "证券代码：300042证券简称：朗科科技公告编号：2018-041",
+        "深圳市朗科科技股份有限公司关于持股5%以上股东将已质押股票办理延期购回的公告",
+        "本公司及董事会全体成员保证公告内容真实、准确和完整，没有虚假记载、误导性陈述或重大遗漏。",
+        "深圳市朗科科技股份有限公司（以下简称“公司”、“本公司”）近日接到持股5%以上股东邓国顺先生通知，获悉：邓国顺先生于2017年5月4日将1800000股公司无限售条件流通股质押给了南京证券股份有限公司，2018年4月13日，其将上述股票质押办理了部分提前购回，提前购回股数为100股。",
+        "2018年5月3日，邓国顺先生将上述股票质押的1799900股办理了延期购回，延期购回日期为2019年5月3日。",
+        "具体事项如下：",
+        "一、股东股份质押的基本情况",
+        "1、股东股份被质押及延期购回的基本情况",
+        "2、股东股份累计被质押的情况",
+        "截至本公告披露之时，邓国顺先生持有本公司股份28900000股，占公司总股本的比例为21.63%。",
+        "邓国顺先生持有的本公司股份累计被质押的数量为22339900股，累计被质押的股份占邓国顺先生所持有的本公司股份总数的77.30%，占公司总股本的比例为16.72%。",
+        "二、备查文件",
+        "1、《股票质押式回购交易协议书》；",
+        "2、中国证券登记结算有限责任公司深圳分公司下发的《证券质押及司法冻结明细表》。",
+        "深圳市朗科科技股份有限公司",
+        "董事会",
+        "2018年5月4日"
+      ]
 
     max_length = [64, 256]
     vocab = tokenization.FullTokenizer('./albert/config/vocab.txt')
     data = process(cache, vocab, max_length)
 
-    em, sentences_mask = oj.predict('./save/20191204054316/model.ckpt', data)
-    ner_logits, ner_index, ner_list_index = get_ner_index_and_ner_list_index(em, data[0], sentences_mask+3)
+    rt = oj.predict('./save/20191204204216/model.ckpt', data, cache)
     print('')

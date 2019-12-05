@@ -35,7 +35,7 @@ class Config(object):
 
 
 if __name__ == '__main__':
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     now_tim = get_time()
 
     # l_path = './save/albert_model.ckpt'
