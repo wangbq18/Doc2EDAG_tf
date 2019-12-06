@@ -209,7 +209,7 @@ class Dee(object):
             for x in ner_index:
                 entity.append(input[x[0]][x[1]:x[2]].max(0))
             sentences_embedding = sentences_embedding[:sentences_mask.argmin(axis=0)]
-            return entity, ner_index, ner_index, sentences_embedding, sentences_mask
+            return np.array(entity, np.float32), ner_index, ner_index, sentences_embedding, sentences_mask
 
         # 计算实体embedding和去除padding部分的句子embedding
         entity_embedding, _, _, sentences_embedding, _ = tf.py_func(select_entity, [input, ner_index,
@@ -242,7 +242,7 @@ class Dee(object):
             for i in range(1, len(ner_list_index)):
                 c = entity_embedding[ner_list_index[i - 1]:ner_list_index[i]].max(axis=0)
                 entity.append(c)
-            return entity, ner_list_index, sentences_embedding
+            return np.array(entity, np.float32), ner_list_index, sentences_embedding
 
         entity_embedding, _, sentences_embedding = tf.py_func(split, [all_embedding, ner_list_index,
                                                                       tf.shape(sentences_embedding)],
@@ -574,6 +574,8 @@ class Dee(object):
         # 第一层transformer编码，用于实体识别以及后续输入
         output1, ft = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
                                                is_training=is_training, use_bert=True)
+        output1 = tf.cast(output1, tf.float32)
+        ft = tf.cast(ft, tf.float32)
         ft = tf.reduce_max(ft, axis=0, keep_dims=True)
 
         """
@@ -634,7 +636,7 @@ class Dee(object):
                 ner_index.extend(ner_map[k])
                 ner_list_index.append(len(ner_index))
 
-            return ner_logits, ner_index, ner_list_index
+            return ner_logits, np.array(ner_index, np.int32), ner_list_index
 
         _, ner_index, ner_list_index = tf.py_func(get_ner_index_and_ner_list_index,
                                                   [ner_tf_max, sentences,

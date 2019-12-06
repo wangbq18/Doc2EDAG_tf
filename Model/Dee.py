@@ -518,8 +518,8 @@ class Dee(object):
             tag = 1 - event_tag
             R = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
                     tf.reduce_sum(tf.cast(tag, tf.float32)) + 0.00001)  # 查全率
-            G = tf.reduce_sum(tf.cast(acc * event_tag, tf.float32)) / (
-                    tf.reduce_sum(tf.cast(tf.cast((acc + event_tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
+            G = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
+                    tf.reduce_sum(tf.cast(tf.cast((acc + tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
             acc2 = (2 * R * G) / (R + G + 0.00001)
             event_type_acc = (acc1 + acc2) / 2
 
@@ -697,7 +697,7 @@ class Dee(object):
             # self.optimization = tf.train.AdamOptimizer(self.config.lr).minimize(self.loss)
             # optimization = tf.train.MomentumOptimizer(self.config.lr, momentum=0.9).minimize(train_loss)
             # self.optimization, self.learning_rate = self.__get_optimization(self.loss, self.config.lr)
-            self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 50000, 5000, False)
+            self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 100000, 5000, False)
 
             self.saver = tf.train.Saver()
             # self.saver1 = tf.train.Saver(tf.trainable_variables())
@@ -766,7 +766,7 @@ class Dee(object):
         test_data_count = get_data_count(self.config.dev_path)
         train_data_count = get_data_count(self.config.train_path)
         size = train_data_count // self.config.batch_size if train_data_count % self.config.batch_size == 0 else train_data_count // self.config.batch_size + 1
-        require_improvement = 10000  # 如果超过指定轮未提升，提前结束训练
+        require_improvement = 50000  # 如果超过指定轮未提升，提前结束训练
         all_loss = 0
         all_acc = 0.0
         all_path_acc = 0.0
@@ -794,11 +794,11 @@ class Dee(object):
                             dev_loss, dev_acc, dev_path_acc = self.evaluate(sess,
                                                                             total_batch // self.config.dev_per_batch - 1,
                                                                             test_data_count)
-                            if min_loss == -1 or dev_loss <= min_loss:
+                            if min_loss == -1 or (dev_acc+dev_path_acc)/2 >= min_loss:
                                 self.saver.save(sess=sess, save_path=save_path)
                                 improved_str = '*'
                                 last_improved = total_batch
-                                min_loss = dev_loss
+                                min_loss = (dev_acc+dev_path_acc)/2
                             else:
                                 improved_str = ''
 

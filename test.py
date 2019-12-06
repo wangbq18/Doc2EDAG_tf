@@ -1,4 +1,4 @@
-from Model.Dee import Dee
+from Model.Dee_bert import Dee
 import albert.tokenization as tokenization
 from create_record import process
 from create_record import get_path
@@ -9,7 +9,7 @@ class Config(object):
     def __init__(self):
         self.seq_length = 256
         self.batch_size = 1
-        self.bert_config_path = './model/albert_tiny/albert_config_tiny.json'
+        self.bert_config_path = './albert/config/albert_config_tiny.json'
         self.lr = 1e-3
         self.hidden_size = 312
         self.sentence_size = 64
@@ -65,6 +65,6 @@ if __name__ == '__main__':
     vocab = tokenization.FullTokenizer('./albert/config/vocab.txt')
     data = process(cache, vocab, max_length)
 
-    rt = oj.predict('./save/20191205155427/model.ckpt', data, cache)
+    rt = oj.predict('./save/20191205205408/model.ckpt', data, cache)
     paths = get_path(rt)
     print(paths)
