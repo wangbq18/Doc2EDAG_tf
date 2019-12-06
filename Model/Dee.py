@@ -297,7 +297,7 @@ class Dee(object):
             G = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
                         tf.reduce_sum(tf.cast(tf.cast((acc + tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
             acc2 = (2 * R * G) / (R + G + 0.00001)
-            return logits, loss, (acc1 + acc2) / 2
+            return logits, loss, (acc1 + acc2) / 2, tf.reshape(input_encode, [-1, self.config.hidden_size])
         else:
             return tf.nn.sigmoid(logits)
 
@@ -339,7 +339,7 @@ class Dee(object):
 
         # 更新m
 
-        return tf.nn.sigmoid(logits), tf.concat([field_embedding, n_entity_embedding], axis=0)
+        return tf.nn.sigmoid(logits), tf.concat([field_embedding, tf.reshape(input_encode, [-1, self.config.hidden_size])], axis=0)
 
     def __get_path_loss(self, fields_embedding_table, event_fields_ids, sentences_embedding, entity_embedding, path_tag,
                         path_entity_list, is_training=False):
@@ -366,25 +366,26 @@ class Dee(object):
                  acc_list):
             event_fields_id = event_fields_ids[index[0]]
 
+            field_embedding = tf.reshape(fields_embedding[index[0], :], [1, self.config.hidden_size])
+            n_entity_embedding = entity_embedding + field_embedding
+
             # 去除padding的path_tag
             def get_path_tag(path_tag, shape):
                 return path_tag[:shape[0]], shape
 
-            path_tag_o, _ = tf.py_func(get_path_tag, [path_tag[index[0]], tf.shape(entity_embedding)],
+            path_tag_o, _ = tf.py_func(get_path_tag, [path_tag[index[0]], tf.shape(n_entity_embedding)],
                                        [tf.int32, tf.int32])
             path_tag_o = tf.reshape(path_tag_o, [-1])
-            logits, loss, acc = self.__get_next_node(sentences_embedding, entity_embedding, event_fields_id, path_tag_o,
+            logits, loss, acc, encode_entity_embedding = self.__get_next_node(sentences_embedding, n_entity_embedding, event_fields_id, path_tag_o,
                                                      is_training=is_training)
             loss_list += tf.reduce_mean(loss)
             acc_list += acc
 
             # 更新m
-            field_embedding = tf.reshape(fields_embedding[index[0], :], [1, self.config.hidden_size])
-            n_entity_embedding = entity_embedding + field_embedding
-            n_entity_embedding = tf.concat([field_embedding, n_entity_embedding], axis=0)
-            n_entity_embedding = tf.reshape(n_entity_embedding[path_entity_list[index[0]]],
+            encode_entity_embedding = tf.concat([field_embedding, encode_entity_embedding], axis=0)
+            encode_entity_embedding = tf.reshape(encode_entity_embedding[path_entity_list[index[0]]],
                                             [-1, self.config.hidden_size])
-            sentences_embedding = tf.concat([sentences_embedding, n_entity_embedding], axis=0)
+            sentences_embedding = tf.concat([sentences_embedding, encode_entity_embedding], axis=0)
 
             return fields_embedding, event_fields_ids, sentences_embedding, entity_embedding, path_tag, path_entity_list, index + 1, loss_list, acc_list
 

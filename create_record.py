@@ -44,7 +44,7 @@ def process(data, tokenization, max_length):
         seq.extend(cache[-max_length[1] + 2:])
         seq.append(tokenization.vocab['[SEP]'])
 
-        mask = [len(seq) - 3]
+        mask = [len(seq)]
 
         cache = kr.preprocessing.sequence.pad_sequences([seq], max_length[1], value=padding_value, padding='post',
                                                         truncating='post')
@@ -261,7 +261,7 @@ if __name__ == '__main__':
     # train_data = read_json('./Data/train.json')
     # save_json(train_data[:10], './Data/sample.json')
 
-    train_data = read_json('./Data/sample.json')
+    train_data = read_json('./Data/sample.json')[:1]
     max_length = [64, 256]
     ner_tag = ['O']
     fields = []

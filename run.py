@@ -1,4 +1,4 @@
-﻿from Model.Dee import Dee
+﻿from save.py.Dee import Dee
 from tools import get_time
 import os
 
@@ -20,8 +20,8 @@ class Config(object):
         self.pos_size = 49
         self.vocab_size = 21128
 
-        self.print_per_batch = 10  # 每多少轮输出一次结果
-        self.dev_per_batch = 2000  # 多少轮验证一次
+        self.print_per_batch = 1  # 每多少轮输出一次结果
+        self.dev_per_batch = 10  # 多少轮验证一次
 
         self.train_path = './tfrecord/sample_train.record'
         self.dev_path = './tfrecord/sample_train.record'
