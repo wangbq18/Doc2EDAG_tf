@@ -1,4 +1,4 @@
-from Model.Dee_bert import Dee
+from Model.Dee_albert import Dee
 from tools import get_time
 import os
 
@@ -21,7 +21,7 @@ class Config(object):
         self.vocab_size = 21128
 
         self.print_per_batch = 100  # 每多少轮输出一次结果
-        self.dev_per_batch = 5000  # 多少轮验证一次
+        self.dev_per_batch = 10000  # 多少轮验证一次
 
         self.train_path = './tfrecord/train.record'
         self.dev_path = './tfrecord/dev.record'

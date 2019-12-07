@@ -190,7 +190,6 @@ def save_as_record(path, data, vocab_path, max_length, fields):
                 else:
                     path_entity_list[start + index2, 0] = 0
                 for i, p in enumerate(path[1:]):
-                    cache = cache[p]
                     tag = np.array([0 if f not in cache.keys() else 1 for f in ners], dtype=np.int32)
                     tag = np.concatenate([tag, np.zeros([path_tag_size[-1] - tag.size], dtype=np.int32)], axis=0)
                     path_tag[start+index2,i+1,:] = tag
@@ -198,6 +197,7 @@ def save_as_record(path, data, vocab_path, max_length, fields):
                         path_entity_list[start+index2,i+1] = ners.index(p)+1
                     else:
                         path_entity_list[start + index2, i + 1] = 0
+                    cache = cache[p]
                 path_event_type[start + index2] = k
             tag = np.array([0 if f not in [c[0] for c in paths] else 1 for f in ners], dtype=np.int32)
             tag = np.concatenate([tag, np.zeros([path_tag_size[-1] - tag.size], dtype=np.int32)], axis=0)

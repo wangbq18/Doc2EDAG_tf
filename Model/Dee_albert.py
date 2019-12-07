@@ -209,7 +209,7 @@ class Dee(object):
             for x in ner_index:
                 entity.append(input[x[0]][x[1]:x[2]].max(0))
             sentences_embedding = sentences_embedding[:sentences_mask.argmin(axis=0)]
-            return np.array(entity, np.float32), ner_index, ner_index, sentences_embedding, sentences_mask
+            return entity, ner_index, ner_index, sentences_embedding, sentences_mask
 
         # 计算实体embedding和去除padding部分的句子embedding
         entity_embedding, _, _, sentences_embedding, _ = tf.py_func(select_entity, [input, ner_index,
@@ -242,7 +242,7 @@ class Dee(object):
             for i in range(1, len(ner_list_index)):
                 c = entity_embedding[ner_list_index[i - 1]:ner_list_index[i]].max(axis=0)
                 entity.append(c)
-            return np.array(entity, np.float32), ner_list_index, sentences_embedding
+            return entity, ner_list_index, sentences_embedding
 
         entity_embedding, _, sentences_embedding = tf.py_func(split, [all_embedding, ner_list_index,
                                                                       tf.shape(sentences_embedding)],
@@ -265,7 +265,7 @@ class Dee(object):
         """
         input = tf.reshape(tf.concat([m, entity], axis=0), [1, -1, self.config.hidden_size])
         input_encode = \
-            self.__get_transformer_model(input, None, self.config, name='transformer-3', use_embedding=False,
+            self.__get_transformer_model(input, None, self.config, name='transformer-2', use_embedding=False,
                                          is_training=is_training)[0]
 
         def select_entity(input, shape):
@@ -298,12 +298,12 @@ class Dee(object):
             G = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
                         tf.reduce_sum(tf.cast(tf.cast((acc + tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
             acc2 = (2 * R * G) / (R + G + 0.00001)
-            return logits, loss, (acc1 + acc2) / 2
+            return logits, loss, (acc1 + acc2) / 2, tf.reshape(input_encode, [-1, self.config.hidden_size])
         else:
             return tf.nn.sigmoid(logits)
 
     def __get_next_node2(self, m, entity, field_id, is_training=False):
-        with tf.variable_scope('path', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             with tf.variable_scope('fields', reuse=tf.AUTO_REUSE):
                 # 词向量
                 fields_embedding_table = tf.get_variable(
@@ -318,9 +318,9 @@ class Dee(object):
         n_entity_embedding = entity + field_embedding
 
         input = tf.reshape(tf.concat([m, entity], axis=0), [1, -1, self.config.hidden_size])
-        with tf.variable_scope('path', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             input_encode = \
-                self.__get_transformer_model(input, None, self.config, name='transformer-3', use_embedding=False,
+                self.__get_transformer_model(input, None, self.config, name='transformer-2', use_embedding=False,
                                              is_training=is_training)[0]
 
             def select_entity(input, shape):
@@ -340,7 +340,7 @@ class Dee(object):
 
         # 更新m
 
-        return tf.nn.sigmoid(logits), tf.concat([field_embedding, n_entity_embedding], axis=0)
+        return tf.nn.sigmoid(logits), tf.concat([field_embedding, tf.reshape(input_encode, [-1, self.config.hidden_size])], axis=0)
 
     def __get_path_loss(self, fields_embedding_table, event_fields_ids, sentences_embedding, entity_embedding, path_tag,
                         path_entity_list, is_training=False):
@@ -358,7 +358,7 @@ class Dee(object):
         def cond(fields_embedding, event_fields_ids, sentences_embedding, entity_embedding, path_tag, path_entity_list,
                  index, loss_list,
                  acc_list):
-            rt = tf.less(index + 1, tf.shape(fields_embedding)[0])[0]
+            rt = tf.less(index, tf.shape(fields_embedding)[0])[0]
             return rt
 
         # TODO 修改路径预测方式
@@ -367,25 +367,26 @@ class Dee(object):
                  acc_list):
             event_fields_id = event_fields_ids[index[0]]
 
+            field_embedding = tf.reshape(fields_embedding[index[0], :], [1, self.config.hidden_size])
+            n_entity_embedding = entity_embedding + field_embedding
+
             # 去除padding的path_tag
             def get_path_tag(path_tag, shape):
                 return path_tag[:shape[0]], shape
 
-            path_tag_o, _ = tf.py_func(get_path_tag, [path_tag[index[0]], tf.shape(entity_embedding)],
+            path_tag_o, _ = tf.py_func(get_path_tag, [path_tag[index[0]], tf.shape(n_entity_embedding)],
                                        [tf.int32, tf.int32])
             path_tag_o = tf.reshape(path_tag_o, [-1])
-            logits, loss, acc = self.__get_next_node(sentences_embedding, entity_embedding, event_fields_id, path_tag_o,
+            logits, loss, acc, encode_entity_embedding = self.__get_next_node(sentences_embedding, n_entity_embedding, event_fields_id, path_tag_o,
                                                      is_training=is_training)
             loss_list += tf.reduce_mean(loss)
             acc_list += acc
 
             # 更新m
-            field_embedding = tf.reshape(fields_embedding[index[0], :], [1, self.config.hidden_size])
-            n_entity_embedding = entity_embedding + field_embedding
-            n_entity_embedding = tf.concat([field_embedding, n_entity_embedding], axis=0)
-            n_entity_embedding = tf.reshape(n_entity_embedding[path_entity_list[index[0]]],
+            encode_entity_embedding = tf.concat([field_embedding, encode_entity_embedding], axis=0)
+            encode_entity_embedding = tf.reshape(encode_entity_embedding[path_entity_list[index[0]]],
                                             [-1, self.config.hidden_size])
-            sentences_embedding = tf.concat([sentences_embedding, n_entity_embedding], axis=0)
+            sentences_embedding = tf.concat([sentences_embedding, encode_entity_embedding], axis=0)
 
             return fields_embedding, event_fields_ids, sentences_embedding, entity_embedding, path_tag, path_entity_list, index + 1, loss_list, acc_list
 
@@ -476,7 +477,7 @@ class Dee(object):
                                            intermediate_size=config.hidden_size * 4, name=name)
             return encode
 
-    def __graph(self, input, is_training):
+    def __graph(self, input, cell, is_training):
         """
 
         :param input:
@@ -489,7 +490,6 @@ class Dee(object):
         # 第一层transformer编码，用于实体识别以及后续输入
         output1, ft = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
                                                is_training=is_training, use_bert=True)
-
         ft = tf.reduce_max(ft, axis=0, keep_dims=True)
 
         """
@@ -498,13 +498,14 @@ class Dee(object):
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
             # # 没有使用激活函数
+            # output1 = cell(output1)
             ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)
             ner_loss, g_v = self.__get_ner_loss(ner_ft[:, 1:-1, :], ner_tag, sentences_mask - 2, self.config.pos_size)
 
         """
         计算融合上下文信息的实体和句子embedding
         """
-        with tf.variable_scope('inference', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             # 计算融合了上下文信息的实体和句子embedding
             entity_embedding, sentences_embedding, document_embedding = self.__get_entity_and_sentences_embedding(
                 output1, ner_list_index,
@@ -515,7 +516,7 @@ class Dee(object):
             event_type_logit = tf.layers.conv1d(tf.reshape(ft, [1, 1, self.config.hidden_size]),
                                                 self.config.event_type_size, 1, name='event_type_dense',
                                                 reuse=tf.AUTO_REUSE)
-            # TODO 需要排查
+
             event_type_loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=tf.reshape(event_type_logit, [-1, 5]),
                                                                       labels=tf.reshape(tf.cast(event_tag, tf.float32),
                                                                                         [-1, 5]))
@@ -534,8 +535,8 @@ class Dee(object):
             tag = 1 - event_tag
             R = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
                     tf.reduce_sum(tf.cast(tag, tf.float32)) + 0.00001)  # 查全率
-            G = tf.reduce_sum(tf.cast(acc * event_tag, tf.float32)) / (
-                    tf.reduce_sum(tf.cast(tf.cast((acc + event_tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
+            G = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
+                    tf.reduce_sum(tf.cast(tf.cast((acc + tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
             acc2 = (2 * R * G) / (R + G + 0.00001)
             event_type_acc = (acc1 + acc2) / 2
 
@@ -543,7 +544,7 @@ class Dee(object):
         计算事件填充loss
         1. 根据事件类型，计算连接概率，输入：当前路径m:句子，加前置路径(字段embedding+属性embedding)
         """
-        with tf.variable_scope('path', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             def get_field_embedding(event_type):
                 fields_name = events_fields[events[event_type]]
                 rt = [fields.index(_) for _ in fields_name]
@@ -569,19 +570,18 @@ class Dee(object):
 
         return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(path_loss), g_v, event_type_acc, path_acc
 
-    def __get_ner_and_event_type_predict(self, sentences, sentences_mask, is_training=False):
+    def __get_ner_and_event_type_predict(self, sentences, sentences_mask, cell, is_training=False):
 
         # 第一层transformer编码，用于实体识别以及后续输入
         output1, ft = self.__get_transformer_model(sentences, sentences_mask, self.config, name='transformer-1',
                                                is_training=is_training, use_bert=True)
-        output1 = tf.cast(output1, tf.float32)
-        ft = tf.cast(ft, tf.float32)
-        ft = tf.reduce_max(ft, axis=0, keep_dims=True)
 
+        ft = tf.reduce_max(ft, axis=0, keep_dims=True)
         """
         ner，需要注意解码部分
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
+            # output1 = cell(output1)
             # # 没有使用激活函数
             ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
 
@@ -603,7 +603,7 @@ class Dee(object):
             for index, x in enumerate(ner_logits):
                 cache = [index, -1, -1]
                 x_c = [str(_) for _ in content[index]][:sentence_mask[index]]
-                for index_y, y in enumerate(x[:sentence_mask[index]]):
+                for index_y, y in enumerate(x[:sentence_mask[index]-1]):
                     if '_B' in tag_map[y]:
                         if cache[1] != -1:
                             cache[2] = index_y + 1
@@ -636,7 +636,7 @@ class Dee(object):
                 ner_index.extend(ner_map[k])
                 ner_list_index.append(len(ner_index))
 
-            return ner_logits, np.array(ner_index, np.int32), ner_list_index
+            return ner_logits, np.array(ner_index, np.int32), np.array(ner_list_index, np.int32)
 
         _, ner_index, ner_list_index = tf.py_func(get_ner_index_and_ner_list_index,
                                                   [ner_tf_max, sentences,
@@ -648,7 +648,7 @@ class Dee(object):
         """
         计算融合上下文信息的实体和句子embedding
         """
-        with tf.variable_scope('inference', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             # 计算融合了上下文信息的实体和句子embedding
             entity_embedding, sentences_embedding, document_embedding = self.__get_entity_and_sentences_embedding(
                 output1, ner_list_index,
@@ -676,15 +676,18 @@ class Dee(object):
             self.data = train[:-1]
             self.dev_data = dev[:-1]
 
-            self.ner_loss, self.event_type_loss, self.path_loss, self.g_v, self.event_type_acc, self.path_acc = self.__graph(
-                train[:-1], True)
-            dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc = self.__graph(
-                dev[:-1], False)
+            cell = tf.keras.layers.Bidirectional(tf.keras.layers.CuDNNLSTM(self.config.hidden_size//2,
+                                                                           return_sequences=True))
 
-            self.dev_loss = 0.05 * dev_ner_loss + 0.95 * (dev_event_type_loss + dev_path_loss)
-            self.loss = 0.05 * self.ner_loss + 0.95 * (self.event_type_loss + self.path_loss)
-            # self.dev_loss = dev_path_loss
-            # self.loss = self.path_loss
+            self.ner_loss, self.event_type_loss, self.path_loss, self.g_v, self.event_type_acc, self.path_acc = self.__graph(
+                train[:-1], cell, True)
+            dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc = self.__graph(
+                dev[:-1], cell, False)
+
+            self.dev_loss = 0.2 * dev_ner_loss + 0.8 * (dev_event_type_loss + dev_path_loss) / 2
+            self.loss = 0.2 * self.ner_loss + 0.8 * (self.event_type_loss + self.path_loss) / 2
+            # self.dev_loss = dev_ner_loss
+            # self.loss = self.ner_loss
 
             """
             创建用于预测的tensor
@@ -699,7 +702,7 @@ class Dee(object):
             self.sentences_mask_input_r = tf.reshape(self.sentences_mask_input, [-1, 64])[0]
 
             self.ner_ft, self.event_type_logit, self.entity_embedding, self.sentences_embedding, self.ner_list_index, self.ner_index = \
-                self.__get_ner_and_event_type_predict(self.sentences_input, self.sentences_mask_input_r,
+                self.__get_ner_and_event_type_predict(self.sentences_input, self.sentences_mask_input_r, cell,
                                                       is_training=False)
 
             self.m = tf.placeholder(tf.float32, [None, self.config.hidden_size], name='m_input')
@@ -713,15 +716,15 @@ class Dee(object):
                                                                                          self.field_id_input,
                                                                                          is_training=False)
 
-            self.optimization = tf.train.AdamOptimizer(self.config.lr).minimize(self.loss)
+            self.optimization = tf.train.AdamOptimizer(self.config.lr).minimize(self.loss, var_list=tf.trainable_variables()[22:])
             self.learning_rate = tf.constant(value=self.config.lr, shape=[], dtype=tf.float32)
             # optimization = tf.train.MomentumOptimizer(self.config.lr, momentum=0.9).minimize(train_loss)
             # self.optimization, self.learning_rate = self.__get_optimization(self.loss, self.config.lr)
-            # self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 50000, 5000, False)
+            # self.optimization, self.learning_rate = create_optimizer(self.loss, self.config.lr, 100000, 5000, False)
 
             self.saver = tf.train.Saver()
-            # self.saver1 = tf.train.Saver(tf.trainable_variables())
-            self.saver_v = tf.train.Saver(tf.trainable_variables()[:24])
+            self.saver1 = tf.train.Saver(tf.trainable_variables())
+            self.saver_v = tf.train.Saver(tf.trainable_variables()[:22])
 
             self.summary_train_loss = tf.summary.scalar('train_loss', self.loss)
             self.summary_dev_loss = tf.summary.scalar('dev_loss', self.dev_loss)
@@ -786,7 +789,7 @@ class Dee(object):
         test_data_count = get_data_count(self.config.dev_path)
         train_data_count = get_data_count(self.config.train_path)
         size = train_data_count // self.config.batch_size if train_data_count % self.config.batch_size == 0 else train_data_count // self.config.batch_size + 1
-        require_improvement = 10000  # 如果超过指定轮未提升，提前结束训练
+        require_improvement = 30000  # 如果超过指定轮未提升，提前结束训练
         all_loss = 0
         all_acc = 0.0
         all_path_acc = 0.0
@@ -814,11 +817,11 @@ class Dee(object):
                             dev_loss, dev_acc, dev_path_acc = self.evaluate(sess,
                                                                             total_batch // self.config.dev_per_batch - 1,
                                                                             test_data_count)
-                            if min_loss == -1 or dev_loss <= min_loss:
+                            if min_loss == -1 or (dev_acc+dev_path_acc)/2 >= min_loss:
                                 self.saver.save(sess=sess, save_path=save_path)
                                 improved_str = '*'
                                 last_improved = total_batch
-                                min_loss = dev_loss
+                                min_loss = (dev_acc+dev_path_acc)/2
                             else:
                                 improved_str = ''
 
@@ -881,8 +884,11 @@ class Dee(object):
 
             # 如果没命中值，使用NA代替
             if next_node_p.max() < 0.5:
+                # try:
                 m = np.concatenate([m, np.reshape(encode_field_entity_embedding[0], [1, -1])])
                 rt['NA' + (':%s' % (fields[field_id]))] = create_tree(self, sess, field_ids[1:], m, entity, entity_name)
+                # except:
+                #     print('')
             else:
                 for index, x in enumerate(next_node_p):
                     if x >= 0.5:
@@ -894,7 +900,7 @@ class Dee(object):
 
         with tf.Session(graph=self.graph, config=tf.ConfigProto(allow_soft_placement=True,
                                                                 gpu_options=tf.GPUOptions(allow_growth=True))) as sess:
-            self.saver.restore(sess, model_path)
+            self.saver1.restore(sess, model_path)
             # 先预测实体
             entity_embedding, event_type_logit, sentences_embedding, ner_list_index, ner_index = sess.run(
                 [self.entity_embedding, self.event_type_logit, self.sentences_embedding, self.ner_list_index,
