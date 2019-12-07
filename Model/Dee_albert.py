@@ -283,6 +283,7 @@ class Dee(object):
             logits = tf.reshape(logits, [-1])
 
         if tag != None:
+            # 由于部分类别存在无数据的情况，这种情况下取有数据的类别的F1
             loss = tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=tf.cast(tag, tf.float32))
             acc = tf.cast(tf.nn.sigmoid(logits) >= 0.5, tf.int32)
             R = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
@@ -298,7 +299,10 @@ class Dee(object):
             G = tf.reduce_sum(tf.cast(acc * tag, tf.float32)) / (
                         tf.reduce_sum(tf.cast(tf.cast((acc + tag) >= 1, tf.int32), tf.float32)) + 0.00001)  # 查准率
             acc2 = (2 * R * G) / (R + G + 0.00001)
-            return logits, loss, (acc1 + acc2) / 2, tf.reshape(input_encode, [-1, self.config.hidden_size])
+
+            p = tf.reduce_sum((1 - tag))
+            F1 = tf.cond(tf.equal(p, tf.zeros_like(p)), lambda: acc2, lambda: (acc1 + acc2) / 2)
+            return logits, loss, F1, tf.reshape(input_encode, [-1, self.config.hidden_size])
         else:
             return tf.nn.sigmoid(logits)
 
@@ -498,7 +502,7 @@ class Dee(object):
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
             # # 没有使用激活函数
-            # output1 = cell(output1)
+            output1 = cell(output1)
             ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)
             ner_loss, g_v = self.__get_ner_loss(ner_ft[:, 1:-1, :], ner_tag, sentences_mask - 2, self.config.pos_size)
 
@@ -581,7 +585,7 @@ class Dee(object):
         ner，需要注意解码部分
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
-            # output1 = cell(output1)
+            output1 = cell(output1)
             # # 没有使用激活函数
             ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
 
@@ -684,8 +688,8 @@ class Dee(object):
             dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc = self.__graph(
                 dev[:-1], cell, False)
 
-            self.dev_loss = 0.2 * dev_ner_loss + 0.8 * (dev_event_type_loss + dev_path_loss) / 2
-            self.loss = 0.2 * self.ner_loss + 0.8 * (self.event_type_loss + self.path_loss) / 2
+            self.dev_loss = self.config.lamdba * dev_ner_loss + (1-self.config.lamdba) * (dev_event_type_loss + dev_path_loss) / 2
+            self.loss = self.config.lamdba * self.ner_loss + (1-self.config.lamdba) * (self.event_type_loss + self.path_loss) / 2
             # self.dev_loss = dev_ner_loss
             # self.loss = self.ner_loss
 

@@ -9,7 +9,8 @@ class Config(object):
         self.seq_length = 256
         self.batch_size = 1
         self.bert_config_path = './albert/config/albert_config_tiny.json'
-        self.lr = 1e-5
+        self.lr = 1e-3
+        self.lamdba = 0.2
         self.hidden_size = 312
         self.sentence_size = 64
         self.fields_size = 35
@@ -35,7 +36,7 @@ class Config(object):
 
 
 if __name__ == '__main__':
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
     now_tim = get_time()
 
     l_path = './save/albert_tiny/albert_model.ckpt'

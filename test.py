@@ -11,6 +11,7 @@ class Config(object):
         self.batch_size = 1
         self.bert_config_path = './albert/config/albert_config_tiny.json'
         self.lr = 1e-3
+        self.lamdba = 0.2
         self.hidden_size = 312
         self.sentence_size = 64
         self.fields_size = 35
