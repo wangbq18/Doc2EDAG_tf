@@ -148,9 +148,13 @@ def save_as_record(path, data, vocab_path, max_length, fields):
         ner_list_index = [0]
         for k in ners:
             ner_index.extend(x['ann_mspan2dranges'][k])
-            ner_index[-1][1] += 1
-            ner_index[-1][2] += 1
+            # ner_index[-1][1] += 1
+            # ner_index[-1][2] += 1
             ner_list_index.append(ner_list_index[-1]+len(x['ann_mspan2dranges'][k]))
+
+        for k in ner_index:
+            k[1] += 1
+            k[2] += 1
 
         for i in range(max_ner_size-len(ner_index)):
             ner_index.append([-1,-1,-1])
@@ -261,7 +265,7 @@ if __name__ == '__main__':
     # train_data = read_json('./Data/train.json')
     # save_json(train_data[:10], './Data/sample.json')
 
-    train_data = read_json('./Data/sample.json')[:1]
+    train_data = read_json('./Data/train.json')
     max_length = [64, 256]
     ner_tag = ['O']
     fields = []
@@ -290,4 +294,4 @@ if __name__ == '__main__':
 
     # save_json(ner_tag, './tfrecord/ner_tag.json')
     ner_tag = read_json('./tfrecord/ner_tag.json')
-    save_as_record('./tfrecord/sample_train.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)
+    save_as_record('./tfrecord/train.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)

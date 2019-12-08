@@ -10,7 +10,7 @@ class Config(object):
         self.batch_size = 1
         self.bert_config_path = './albert/config/albert_config_tiny.json'
         self.lr = 1e-3
-        self.lamdba = 0.2
+        self.lamdba = 0.5
         self.hidden_size = 312
         self.sentence_size = 64
         self.fields_size = 35
@@ -22,11 +22,11 @@ class Config(object):
         self.vocab_size = 21128
 
         self.print_per_batch = 100  # 每多少轮输出一次结果
-        self.dev_per_batch = 10000  # 多少轮验证一次
+        self.dev_per_batch = 5000  # 多少轮验证一次
 
         self.train_path = './tfrecord/train.record'
         self.dev_path = './tfrecord/dev.record'
-        self.num_epochs = 100
+        self.num_epochs = 1000
 
     def get_all_number(self):
         rt = {}
@@ -36,12 +36,12 @@ class Config(object):
 
 
 if __name__ == '__main__':
-    os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     now_tim = get_time()
 
     l_path = './save/albert_tiny/albert_model.ckpt'
     # l_path = None
-    # l_path = './model/albert_ft/20191123144355/model.ckpt'
+    # l_path = './save/20191207203554/model.ckpt'
 
     path = './save/%s/model.ckpt' % (now_tim)
 

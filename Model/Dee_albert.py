@@ -481,6 +481,69 @@ class Dee(object):
                                            intermediate_size=config.hidden_size * 4, name=name)
             return encode
 
+    def __get_ner_list(self, ner_ft, content, sentences_mask, g_v):
+
+        def viterbi_decode(ner_ft, g_v):
+            p = [tf.contrib.crf.viterbi_decode(x, g_v)[0] for x in ner_ft]
+            return np.array(p, dtype=np.int32), g_v
+
+        ner_tf_max, _ = tf.py_func(viterbi_decode, [ner_ft, g_v], [tf.int32, tf.float32])
+
+        """
+                根据预测结果生成ner_list_index和ner_index, 写入index时需要+1
+                """
+
+        def get_ner_index_and_ner_list_index(ner_logits, content, sentence_mask):
+            sentences_size = sentence_mask.argmin(axis=0)
+            ner_logits = ner_logits[:sentences_size]
+            content = content[:sentences_size]
+            ner_map = {}
+            for index, x in enumerate(ner_logits):
+                cache = [index, -1, -1]
+                x_c = [str(_) for _ in content[index]][:sentence_mask[index]]
+                for index_y, y in enumerate(x[:sentence_mask[index] - 1]):
+                    if '_B' in tag_map[y]:
+                        if cache[1] != -1:
+                            cache[2] = index_y + 1
+                            name = '-'.join(x_c[cache[1]:cache[2]])
+                            if name not in ner_map.keys():
+                                ner_map[name] = []
+                            ner_map[name].append(cache)
+                            cache = [index, index_y, -1]
+                        else:
+                            cache[1] = index_y + 1
+                    if 'O' == tag_map[y] and cache[1] != -1:
+                        cache[2] = index_y + 1
+                        name = '-'.join(x_c[cache[1]:cache[2]])
+                        if name not in ner_map.keys():
+                            ner_map[name] = []
+                        ner_map[name].append(cache)
+                        cache = [index, -1, -1]
+
+                # 处理最后一个字符也是实体的情况
+                if cache[1] != -1:
+                    cache[2] = index_y + 1
+                    name = '-'.join(x_c[cache[1]:cache[2]])
+                    if name not in ner_map.keys():
+                        ner_map[name] = []
+                    ner_map[name].append(cache)
+
+            ner_list_index = [0]
+            ner_index = []
+            for k in ner_map.keys():
+                ner_index.extend(ner_map[k])
+                ner_list_index.append(len(ner_index))
+
+            return ner_logits, np.array(ner_index, np.int32), np.array(ner_list_index, np.int32)
+
+        _, ner_index, ner_list_index = tf.py_func(get_ner_index_and_ner_list_index,
+                                                  [ner_tf_max, content,
+                                                   sentences_mask], [tf.int32, tf.int32, tf.int32])
+
+        ner_index = tf.reshape(ner_index, [-1, 3])
+        ner_list_index = tf.reshape(ner_list_index, [-1])
+        return ner_index, ner_list_index
+
     def __graph(self, input, cell, is_training):
         """
 
@@ -503,8 +566,11 @@ class Dee(object):
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
             # # 没有使用激活函数
             output1 = cell(output1)
-            ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)
-            ner_loss, g_v = self.__get_ner_loss(ner_ft[:, 1:-1, :], ner_tag, sentences_mask - 2, self.config.pos_size)
+            ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
+            ner_loss, g_v = self.__get_ner_loss(ner_ft, ner_tag, sentences_mask - 2, self.config.pos_size)
+
+            if not is_training:
+                p_ner_index, p_ner_list_index = self.__get_ner_list(ner_ft, sentences, sentences_mask, g_v)
 
         """
         计算融合上下文信息的实体和句子embedding
@@ -572,7 +638,11 @@ class Dee(object):
                                                        path_tag,
                                                        path_entity_list, is_training=is_training)
 
-        return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(path_loss), g_v, event_type_acc, path_acc
+        if is_training:
+            return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(path_loss), g_v, event_type_acc, path_acc
+        else:
+            return ner_loss, tf.reduce_mean(event_type_loss), tf.reduce_mean(
+                path_loss), g_v, event_type_acc, path_acc, p_ner_index, p_ner_list_index
 
     def __get_ner_and_event_type_predict(self, sentences, sentences_mask, cell, is_training=False):
 
@@ -685,8 +755,11 @@ class Dee(object):
 
             self.ner_loss, self.event_type_loss, self.path_loss, self.g_v, self.event_type_acc, self.path_acc = self.__graph(
                 train[:-1], cell, True)
-            dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc = self.__graph(
+            dev_ner_loss, dev_event_type_loss, dev_path_loss, _, self.dev_event_type_acc, self.dev_path_acc, self.p_ner_index, self.p_ner_list_index = self.__graph(
                 dev[:-1], cell, False)
+
+            self.dev_ner_index = dev[6]
+            self.dev_ner_list_index = dev[5]
 
             self.dev_loss = self.config.lamdba * dev_ner_loss + (1-self.config.lamdba) * (dev_event_type_loss + dev_path_loss) / 2
             self.loss = self.config.lamdba * self.ner_loss + (1-self.config.lamdba) * (self.event_type_loss + self.path_loss) / 2
@@ -771,17 +844,25 @@ class Dee(object):
         all_loss = []
         all_acc = []
         all_path_acc = []
+        all_ner_acc = []
         batch_size = self.config.batch_size
         size = test_data_count // batch_size if test_data_count % batch_size == 0 else test_data_count // batch_size + 1
         for step in tqdm(range(size)):
-            loss, dev_event_type_acc, dev_path_acc, summary = sess.run(
+            loss, dev_event_type_acc, dev_path_acc, summary, p_ner_index, dev_ner_index = sess.run(
                 [self.dev_loss, self.dev_event_type_acc, self.dev_path_acc,
-                 self.summary_dev_loss])
+                 self.summary_dev_loss, self.p_ner_index, self.dev_ner_index])
+
+            p_ner = set(['-'.join([str(x[0]), str(x[1]-1), str(x[2]-1)]) for x in p_ner_index])
+            dev_ner = set(['-'.join([str(x[0]), str(x[1]-1), str(x[2]-1)]) for x in dev_ner_index])
+
+            G = len(p_ner & dev_ner) / (len(p_ner | dev_ner) + 0.00001)
+            R = len(p_ner & dev_ner) / (len(dev_ner) + 0.00001)
+            all_ner_acc.append((2 * G * R) / (G + R + 0.00001))
             all_acc.append(dev_event_type_acc)
             all_loss.append(loss)
             all_path_acc.append(dev_path_acc[0])
 
-        return sum(all_loss) / len(all_loss), sum(all_acc) / len(all_acc), sum(all_path_acc) / len(all_acc)
+        return sum(all_loss) / len(all_loss), sum(all_acc) / len(all_acc), sum(all_path_acc) / len(all_acc), sum(all_ner_acc) / len(all_ner_acc)
 
     def train(self, load_path, save_path, log_path, is_reload=False):
         log_writer = tf.summary.FileWriter(log_path, self.graph)
@@ -813,28 +894,28 @@ class Dee(object):
             for epoch in range(self.config.num_epochs):
                 if flag:
                     break
-                logging.info('Epoch:%d' % (epoch + 1))
+                # logging.info('Epoch:%d' % (epoch + 1))
                 sess.run(self.train_op)
                 for step in range(size):
                     if total_batch % self.config.print_per_batch == 0:
-                        if total_batch % self.config.dev_per_batch == 0 and total_batch != 0:
-                            dev_loss, dev_acc, dev_path_acc = self.evaluate(sess,
+                        if total_batch % self.config.dev_per_batch == 0:
+                            dev_loss, dev_acc, dev_path_acc, dev_ner_acc = self.evaluate(sess,
                                                                             total_batch // self.config.dev_per_batch - 1,
                                                                             test_data_count)
-                            if min_loss == -1 or (dev_acc+dev_path_acc)/2 >= min_loss:
+                            if min_loss == -1 or (dev_acc+dev_path_acc+dev_ner_acc)/3 >= min_loss:
                                 self.saver.save(sess=sess, save_path=save_path)
                                 improved_str = '*'
                                 last_improved = total_batch
-                                min_loss = (dev_acc+dev_path_acc)/2
+                                min_loss = (dev_acc+dev_path_acc+dev_ner_acc)/3
                             else:
                                 improved_str = ''
 
                             time_dif = get_time_dif(start_time)
-                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Train Event acc: {2:>6.5}, Train Path acc: {3:>6.5}， Val loss: {4:>6.5}, Val acc: {5:>6.5}, Val Path acc: {6:>6.5}, Time: {7} {8}'
+                            msg = 'Iter: {0:>6}, Train Loss: {1:>6.5}, Train Event acc: {2:>6.5}, Train Path acc: {3:>6.5}， Val loss: {4:>6.5}, Val acc: {5:>6.5}, Val Path acc: {6:>6.5}, Val NER acc: {7:>6.5}, Time: {8} {9}'
                             logging.info(
                                 msg.format(total_batch, all_loss / self.config.print_per_batch,
                                            all_acc / self.config.print_per_batch,
-                                           all_path_acc / self.config.print_per_batch, dev_loss, dev_acc, dev_path_acc,
+                                           all_path_acc / self.config.print_per_batch, dev_loss, dev_acc, dev_path_acc, dev_ner_acc,
                                            time_dif, improved_str))
                         else:
                             time_dif = get_time_dif(start_time)
@@ -888,11 +969,8 @@ class Dee(object):
 
             # 如果没命中值，使用NA代替
             if next_node_p.max() < 0.5:
-                # try:
                 m = np.concatenate([m, np.reshape(encode_field_entity_embedding[0], [1, -1])])
                 rt['NA' + (':%s' % (fields[field_id]))] = create_tree(self, sess, field_ids[1:], m, entity, entity_name)
-                # except:
-                #     print('')
             else:
                 for index, x in enumerate(next_node_p):
                     if x >= 0.5:
