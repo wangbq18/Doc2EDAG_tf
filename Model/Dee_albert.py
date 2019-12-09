@@ -980,6 +980,8 @@ class Dee(object):
                                                                                             m, entity, entity_name)
             return rt
 
+        print('原文')
+        print(''.join(raw_data))
         with tf.Session(graph=self.graph, config=tf.ConfigProto(allow_soft_placement=True,
                                                                 gpu_options=tf.GPUOptions(allow_growth=True))) as sess:
             self.saver1.restore(sess, model_path)
@@ -995,6 +997,8 @@ class Dee(object):
                 cache = raw_data[x[0]][x[1] - 1:x[2] - 1]
                 if cache not in entity:
                     entity.append(cache)
+
+            print(entity)
 
             # 构建路径树
             rt = {}
