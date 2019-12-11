@@ -70,8 +70,8 @@ def get_int_feature(data):
 
 
 def save_as_record(path, data, vocab_path, max_length, fields):
-    path_tag_size = [40,20,100]
-    max_ner_size = 128
+    path_tag_size = [40,10,100]
+    max_ner_size = 64
     events = {'EquityFreeze': 0, 'EquityRepurchase': 1, 'EquityUnderweight': 2, 'EquityOverweight': 3,
               'EquityPledge': 4}
     events_fields = {'EquityFreeze': ['EquityHolder',
@@ -265,7 +265,7 @@ if __name__ == '__main__':
     # train_data = read_json('./Data/train.json')
     # save_json(train_data[:10], './Data/sample.json')
 
-    train_data = read_json('./Data/train.json')
+    train_data = read_json('./Data/dev.json')
     max_length = [64, 256]
     ner_tag = ['O']
     fields = []
@@ -294,4 +294,4 @@ if __name__ == '__main__':
 
     # save_json(ner_tag, './tfrecord/ner_tag.json')
     ner_tag = read_json('./tfrecord/ner_tag.json')
-    save_as_record('./tfrecord/train.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)
+    save_as_record('./tfrecord/dev.record', save_data, './albert/config/vocab.txt', max_length, ner_tag)

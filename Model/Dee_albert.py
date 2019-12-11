@@ -92,7 +92,7 @@ class Dee(object):
                                                    'ner_list_index': tf.FixedLenFeature([], tf.string),
                                                    'ner_index': tf.FixedLenFeature([], tf.string),
                                                    'path_num': tf.FixedLenFeature([], tf.int64),
-                                                   'path_event_type': tf.FixedLenFeature([40], tf.int64),
+                                                   'path_event_type': tf.FixedLenFeature([self.config.path_tag_size[0]], tf.int64),
                                                    'path_entity_list': tf.FixedLenFeature([], tf.string),
                                                }
                                                )
@@ -126,16 +126,16 @@ class Dee(object):
         path_num = tf.cast(path_num, tf.int32)
         path_event_type = tf.cast(path_event_type, tf.int32)
 
-        sentences = tf.reshape(sentences, [-1, 64, 256])[0]
-        sentences_mask = tf.reshape(sentences_mask, [-1, 64])[0]
-        event_tag = tf.reshape(event_tag, [-1, 5])[0]
-        ner_tag = tf.reshape(ner_tag, [-1, 64, 256])[0]
-        path_tag = tf.reshape(path_tag, [-1, 40, 20, 100])[0]
+        sentences = tf.reshape(sentences, [-1, self.config.sentence_size, self.config.seq_length])[0]
+        sentences_mask = tf.reshape(sentences_mask, [-1, self.config.sentence_size])[0]
+        event_tag = tf.reshape(event_tag, [-1, self.config.event_type_size])[0]
+        ner_tag = tf.reshape(ner_tag, [-1, self.config.sentence_size, self.config.seq_length])[0]
+        path_tag = tf.reshape(path_tag, [-1] + self.config.path_tag_size )[0]
         ner_list_index = tf.reshape(ner_list_index, [-1])
         ner_index = tf.reshape(ner_index, [-1, 3])
         path_num = tf.reshape(path_num, [-1, 1])[0]
         path_event_type = tf.reshape(path_event_type, [-1])
-        path_entity_list = tf.reshape(path_entity_list, [-1, 40, 20])[0]
+        path_entity_list = tf.reshape(path_entity_list, [-1]+ self.config.path_tag_size[:2])[0]
 
         def select_path(path_tag, path_num, path_event_type, path_entity_list):
             path_index = np.random.randint(0, path_num[0], size=1, dtype=np.int32)[0]
@@ -146,7 +146,7 @@ class Dee(object):
                                                                              [path_tag, path_num, path_event_type,
                                                                               path_entity_list],
                                                                              [tf.int32, tf.int32, tf.int32, tf.int32])
-        path_tag = tf.reshape(path_tag, [20, 100])
+        path_tag = tf.reshape(path_tag, self.config.path_tag_size[1:])
 
         # 去除padding的ner_index
         def select_nert_index(ner_index, ner_list_index, path_entity_list):
@@ -200,7 +200,7 @@ class Dee(object):
                 dtype=dtype)
 
         sentence_pos_embedding = tf.slice(sentence_embedding_table, [0, 0],
-                                          [64, -1])
+                                          [self.config.sentence_size, -1])
         sentences_embedding = tf.reduce_max(input, axis=1) + sentence_pos_embedding
 
         def select_entity(input, ner_index, sentences_embedding, sentences_mask):
@@ -276,7 +276,9 @@ class Dee(object):
 
         with tf.variable_scope('path_dense', reuse=tf.AUTO_REUSE):
             # logits = tf.layers.dense(input_encode, 2, name='path_logits_dense', reuse=tf.AUTO_REUSE)
-            logits = tf.layers.conv1d(input_encode, self.config.fields_size, 1, name='path_logits_dense',
+            noise = [tf.shape(input_encode)[0], 1, tf.shape(input_encode)[2]]
+            input_encode_dropout = tf.layers.dropout(input_encode, self.config.dropout, noise, training=is_training)
+            logits = tf.layers.conv1d(input_encode_dropout, self.config.fields_size, 1, name='path_logits_dense',
                                       reuse=tf.AUTO_REUSE)
             logits = tf.transpose(tf.reshape(logits, [-1, self.config.fields_size]), [1, 0])
             logits = tf.nn.embedding_lookup(logits, field_id)
@@ -321,7 +323,7 @@ class Dee(object):
         field_embedding = tf.reshape(fields_embedding, [1, self.config.hidden_size])
         n_entity_embedding = entity + field_embedding
 
-        input = tf.reshape(tf.concat([m, entity], axis=0), [1, -1, self.config.hidden_size])
+        input = tf.reshape(tf.concat([m, n_entity_embedding], axis=0), [1, -1, self.config.hidden_size])
         with tf.variable_scope('step-2', reuse=tf.AUTO_REUSE):
             input_encode = \
                 self.__get_transformer_model(input, None, self.config, name='transformer-2', use_embedding=False,
@@ -336,7 +338,10 @@ class Dee(object):
             with tf.variable_scope('path_dense', reuse=tf.AUTO_REUSE):
                 # logits = tf.layers.dense(input_encode, 2, name='path_logits_dense', reuse=tf.AUTO_REUSE)
 
-                logits = tf.layers.conv1d(input_encode, self.config.fields_size, 1, name='path_logits_dense',
+                noise = [tf.shape(input_encode)[0], 1, tf.shape(input_encode)[2]]
+                input_encode_dropout = tf.layers.dropout(input_encode, self.config.dropout, noise, training=is_training)
+
+                logits = tf.layers.conv1d(input_encode_dropout, self.config.fields_size, 1, name='path_logits_dense',
                                           reuse=tf.AUTO_REUSE)
                 logits = tf.transpose(tf.reshape(logits, [-1, self.config.fields_size]), [1, 0])
                 logits = tf.nn.embedding_lookup(logits, field_id)
@@ -565,8 +570,10 @@ class Dee(object):
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
             # # 没有使用激活函数
-            output1 = cell(output1)
-            ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
+            noise = [tf.shape(output1)[0], 1, tf.shape(output1)[2]]
+            ner_em = tf.layers.dropout(output1, self.config.dropout, noise ,training=is_training)
+            ner_em = cell(ner_em)
+            ner_ft = tf.layers.dense(ner_em, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
             ner_loss, g_v = self.__get_ner_loss(ner_ft, ner_tag, sentences_mask - 2, self.config.pos_size)
 
             if not is_training:
@@ -655,9 +662,11 @@ class Dee(object):
         ner，需要注意解码部分
         """
         with tf.variable_scope('ner', reuse=tf.AUTO_REUSE):
-            output1 = cell(output1)
+            noise = [tf.shape(output1)[0], 1, tf.shape(output1)[2]]
+            ner_em = tf.layers.dropout(output1, self.config.dropout, noise, training=is_training)
+            ner_em = cell(ner_em)
             # # 没有使用激活函数
-            ner_ft = tf.layers.dense(output1, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
+            ner_ft = tf.layers.dense(ner_em, self.config.pos_size, name='ner_dense', reuse=tf.AUTO_REUSE)[:, 1:-1]
 
         def viterbi_decode(ner_ft, g_v):
             p = [tf.contrib.crf.viterbi_decode(x, g_v)[0] for x in ner_ft]
@@ -776,7 +785,7 @@ class Dee(object):
             self.sentences_input = tf.placeholder(tf.int32, [None, self.config.seq_length], name='sentence_input')
             self.sentences_mask_input = tf.placeholder(tf.int32, [None, 1], name='sentence_mask')
 
-            self.sentences_mask_input_r = tf.reshape(self.sentences_mask_input, [-1, 64])[0]
+            self.sentences_mask_input_r = tf.reshape(self.sentences_mask_input, [-1, self.config.sentence_size])[0]
 
             self.ner_ft, self.event_type_logit, self.entity_embedding, self.sentences_embedding, self.ner_list_index, self.ner_index = \
                 self.__get_ner_and_event_type_predict(self.sentences_input, self.sentences_mask_input_r, cell,
@@ -898,7 +907,7 @@ class Dee(object):
                 sess.run(self.train_op)
                 for step in range(size):
                     if total_batch % self.config.print_per_batch == 0:
-                        if total_batch % self.config.dev_per_batch == 0:
+                        if total_batch % self.config.dev_per_batch == 0 and total_batch!=0:
                             dev_loss, dev_acc, dev_path_acc, dev_ner_acc = self.evaluate(sess,
                                                                             total_batch // self.config.dev_per_batch - 1,
                                                                             test_data_count)

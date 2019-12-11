@@ -20,6 +20,9 @@ class Config(object):
         self.initializer_range = 0.02
         self.pos_size = 49
         self.vocab_size = 21128
+        self.path_tag_size = [40,10,100]
+        self.max_ner_size = 64
+        self.dropout = 0.5
 
         self.print_per_batch = 100  # 每多少轮输出一次结果
         self.dev_per_batch = 5000  # 多少轮验证一次
