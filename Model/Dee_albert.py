@@ -209,7 +209,7 @@ class Dee(object):
             for x in ner_index:
                 entity.append(input[x[0]][x[1]:x[2]].max(0))
             sentences_embedding = sentences_embedding[:sentences_mask.argmin(axis=0)]
-            return entity, ner_index, ner_index, sentences_embedding, sentences_mask
+            return np.array(entity, np.float32), ner_index, ner_index, sentences_embedding, sentences_mask
 
         # 计算实体embedding和去除padding部分的句子embedding
         entity_embedding, _, _, sentences_embedding, _ = tf.py_func(select_entity, [input, ner_index,
@@ -242,7 +242,7 @@ class Dee(object):
             for i in range(1, len(ner_list_index)):
                 c = entity_embedding[ner_list_index[i - 1]:ner_list_index[i]].max(axis=0)
                 entity.append(c)
-            return entity, ner_list_index, sentences_embedding
+            return np.array(entity, np.float32), ner_list_index, sentences_embedding
 
         entity_embedding, _, sentences_embedding = tf.py_func(split, [all_embedding, ner_list_index,
                                                                       tf.shape(sentences_embedding)],
@@ -269,7 +269,7 @@ class Dee(object):
                                          is_training=is_training)[0]
 
         def select_entity(input, shape):
-            return input[shape[0]:], shape
+            return np.array(input[shape[0]:], np.float32), shape
 
         input_encode, _ = tf.py_func(select_entity, [input_encode, tf.shape(m)], [tf.float32, tf.int32])
         input_encode = tf.reshape(input_encode, [1, -1, self.config.hidden_size])
@@ -330,7 +330,7 @@ class Dee(object):
                                              is_training=is_training)[0]
 
             def select_entity(input, shape):
-                return input[shape[0]:], shape
+                return np.array(input[shape[0]:], np.float32), shape
 
             input_encode, _ = tf.py_func(select_entity, [input_encode, tf.shape(m)], [tf.float32, tf.int32])
             input_encode = tf.reshape(input_encode, [1, -1, self.config.hidden_size])
